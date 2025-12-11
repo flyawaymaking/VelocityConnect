@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'com.flyaway.velocity'
-version = '1.1.0'
+version = '1.2.0'
 
 java {
     toolchain {
@@ -19,17 +19,7 @@ repositories {
 }
 
 dependencies {
-    // Velocity API
     implementation 'com.velocitypowered:velocity-api:3.4.0-SNAPSHOT'
-    
-    // Adventure для текстовых компонентов
-    compileOnly 'net.kyori:adventure-api:4.17.0'
-    
-    // Guice для dependency injection
-    compileOnly 'com.google.inject:guice:5.1.0'
-    
-    // SLF4J для логгирования
-    compileOnly 'org.slf4j:slf4j-api:2.0.13'
 }
 
 tasks.jar {

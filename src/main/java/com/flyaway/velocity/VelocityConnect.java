@@ -9,8 +9,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.slf4j.Logger;
 
 import java.io.ByteArrayInputStream;
@@ -23,6 +22,7 @@ public class VelocityConnect {
     private final ProxyServer server;
     private final Logger logger;
     private final MinecraftChannelIdentifier channel;
+    private final MiniMessage miniMessage = MiniMessage.miniMessage();
 
     @Inject
     public VelocityConnect(ProxyServer server, Logger logger) {
@@ -51,61 +51,69 @@ public class VelocityConnect {
 
         Player player = serverConnection.getPlayer();
 
-        // Обработка в отдельном потоке для избежания блокировок
         server.getScheduler().buildTask(this, () -> processPluginMessage(player, event.getData()))
-                .delay(50, TimeUnit.MILLISECONDS)
+                .delay(1, TimeUnit.SECONDS)
                 .schedule();
     }
 
     private void processPluginMessage(Player player, byte[] data) {
+        String username = player.getUsername();
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
             String subChannel = in.readUTF();
             String serverName = in.readUTF();
 
-            if ("Connect".equals(subChannel)) {
-                Optional<RegisteredServer> targetServer = server.getServer(serverName);
+            if (!"Connect".equals(subChannel)) {
+                logger.warn("Неизвестный подканал: {}", subChannel);
+                return;
+            }
 
-                if (targetServer.isPresent() && player.isActive()) {
-                    RegisteredServer target = targetServer.get();
-                    logger.info("Подключаем игрока {} к серверу {}", player.getUsername(), serverName);
+            Optional<RegisteredServer> optionalServer = server.getServer(serverName);
+            if (optionalServer.isEmpty()) {
+                if (player.isActive()) {
+                    player.sendMessage(miniMessage.deserialize("<red>❌ Сервер <yellow>" + serverName + "</yellow> не найден!"));
+                }
+                logger.warn("Сервер {} не найден (игрок: {})", serverName, username);
+                return;
+            }
 
-                    // Проверка текущего сервера игрока
-                    Optional<ServerConnection> currentServer = player.getCurrentServer();
-                    if (currentServer.isPresent() && currentServer.get().getServerInfo().getName().equals(serverName)) {
-                        player.sendMessage(Component.text("Вы уже находитесь на этом сервере!", NamedTextColor.YELLOW));
-                        return;
-                    }
+            RegisteredServer target = optionalServer.get();
 
-                    // Подключение с обработкой результата
-                    player.createConnectionRequest(target).connect().whenComplete((result, throwable) -> {
-                        if (throwable != null || !result.isSuccessful()) {
-                            String errorMessage = throwable != null ?
-                                throwable.getMessage() :
-                                "Неизвестная ошибка подключения";
+            if (player.getCurrentServer()
+                    .map(conn -> conn.getServerInfo().getName().equalsIgnoreCase(serverName))
+                    .orElse(false)) {
+                player.sendMessage(miniMessage.deserialize("<yellow>⚠ Вы уже находитесь на этом сервере!"));
+                return;
+            }
 
-                            logger.warn("Не удалось подключить игрока {} к серверу {}: {}",
-                                    player.getUsername(), serverName, errorMessage);
+            logger.info("Подключаем игрока {} к серверу {}", username, serverName);
+
+            player.createConnectionRequest(target)
+                    .connect()
+                    .thenAccept(result -> {
+                        if (!result.isSuccessful()) {
+                            String attempted = result.getAttemptedConnection()
+                                    .getServerInfo()
+                                    .getName();
+                            logger.warn("Не удалось подключить игрока {} к серверу {}", username, attempted);
 
                             if (player.isActive()) {
-                                player.sendMessage(Component.text("Ошибка подключения к серверу: " + errorMessage, NamedTextColor.RED));
+                                player.sendMessage(miniMessage.deserialize(
+                                        "<red>❌ Ошибка подключения к серверу " + attempted
+                                ));
                             }
-                        } else {
-                            logger.info("Игрок {} успешно подключен к серверу {}", player.getUsername(), serverName);
+                            return;
+                        }
+
+                        logger.info("✅ Игрок {} успешно подключён к серверу {}", username, target.getServerInfo().getName());
+                        if (player.isActive()) {
+                            player.sendMessage(miniMessage.deserialize(
+                                    "<green>✅ Подключено к серверу <yellow>" + target.getServerInfo().getName()
+                            ));
                         }
                     });
 
-                } else {
-                    logger.warn("Сервер {} не найден или игрок {} не активен", serverName, player.getUsername());
-                    if (player.isActive()) {
-                        player.sendMessage(Component.text("Сервер " + serverName + " не найден или недоступен!", NamedTextColor.RED));
-                    }
-                }
-            } else {
-                logger.warn("Неизвестный подканал: {}", subChannel);
-            }
         } catch (IOException e) {
-            logger.warn("Ошибка при обработке PluginMessage от игрока {}: {}",
-                    player.getUsername(), e.getMessage());
+            logger.warn("Ошибка при обработке PluginMessage от игрока {}: {}", username, e.getMessage());
         }
     }
 }
